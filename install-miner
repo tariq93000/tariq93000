@@ -413,6 +413,7 @@ install_aur_packages() {
   fi
 
   if [[ ! -d /home/build/paru ]]; then
+    cd /home/build/
     git clone https://aur.archlinux.org/paru.git
   fi
 
