@@ -1,0 +1,470 @@
+#!/bin/bash
+
+FILESYSTEM='btrfs' # btrfs|xfs|ext4
+BOOTSIZE='256' # MB
+SWAPFILE='0' # MB
+HOSTNAME=''
+ROOT_PASSWORD=''
+USER_NAME=''
+USER_PASSWORD=''
+TIMEZONE='Asia/Muscat'
+LANGUAGE=(en_US ar_OM)
+KEYMAP='us'
+GPU='intel' # intel|nvidia|amd|ati|visa
+packages=''
+aur_packages=(google-chrome trex-bin)
+SERVER='https://mirror.sg.gs/archlinux/$repo/os/$arch'
+
+setup_drive() {
+
+  lsblk -o name,size,mountpoint,fstype,label,model,serial
+
+  location="/dev/disk/by-id/"
+
+  LIST=($( ls $location | grep -Ew "^ata-.*|^nvme-.*|^scsi-.*|^usb-.*" | grep -v ".*-part.*|*.*" ))
+
+  for i in ${!LIST[@]}; do
+    echo -e "\n\t${i}\t${LIST[$i]}"
+  done
+
+  read -p " --- drive ? " i
+
+  if [[ $i -le ${#LIST[@]} ]]; then
+    DRIVE=$location"${LIST[$i]}"
+  else
+    setup_drive
+  fi
+
+  echo '==> creating GPT'
+  create_gpt
+  echo '==> creating partitions'
+  create_partitions
+  echo '==> creating boot filesystem'
+  create_bootfs
+  echo '==> creating root filesystem'
+  create_rootfs
+
+  mount_drive
+
+}
+
+mount_drive() {
+
+  echo '==> mounting root drive'
+  mount_root
+  echo '==> mounting boot drive'
+  mount_boot
+
+  setup_base
+
+}
+
+setup_base() {
+
+  echo '==> updating packages database'
+  update_pacman
+  echo '==> installing base system'
+  install_base
+  echo '==> setting fstab'
+  set_fstab
+  echo '==> changing root'
+  change_root
+
+}
+
+configure() {
+
+  echo '==> editing fstab'
+  edit_fstab
+
+  if [ $SWAPFILE != "0" ]; then
+    echo '==> creating swap file'
+    create_swap_file
+  fi
+
+  echo '==> setting hostname'
+  set_hostname
+
+  echo '==> setting timezone'
+  set_timezone
+
+  echo '==> setting locale'
+  set_locale
+
+  echo '==> setting console keymap'
+  set_keymap
+
+  echo '==> setting hosts file'
+  set_hosts
+
+  echo '==> setting root password'
+  set_root_password
+
+  echo '==> creating user'
+  create_user
+
+  echo '==> setting initial modules to load'
+  set_modules_load
+
+  echo '==> configuring initial ramdisk'
+  set_initcpio
+
+  echo '==> installing packages'
+  install_packages
+
+  echo '==> installing AUR packages'
+  install_aur_packages
+
+  echo '==> cleaning packages'
+  clean_packages
+
+  echo '==> enabling services'
+  set_services
+
+  echo '==> installing grub bootloader'
+  install_grub
+
+  echo '==> un-mount and reboot'
+  finish
+
+}
+
+create_gpt() {
+
+  sgdisk -Z -U -v $DRIVE
+  sgdisk -o $DRIVE
+
+}
+
+create_partitions() {
+
+  sgdisk -n 1:0:+"$BOOTSIZE"M -c 1:BOOT -t 1:ef00 $DRIVE
+
+  sgdisk -n 2:0:0 -c 2:ROOT -t 2:8300 $DRIVE
+
+  sgdisk -p $DRIVE
+
+  BOOT_DRIVE=$DRIVE"-part1"
+  ROOT_DRIVE=$DRIVE"-part2"
+
+}
+
+create_bootfs() {
+
+  sleep 1
+  mkfs.fat -F32 -n BOOT $BOOT_DRIVE
+
+}
+
+create_rootfs() {
+
+  if [ $FILESYSTEM = "btrfs" ]; then
+    mkfs.btrfs -f $ROOT_DRIVE
+  elif [ $FILESYSTEM = "xfs" ]; then
+    mkfs.xfs -f $ROOT_DRIVE
+  elif [ $FILESYSTEM = "ext4" ]; then
+    mkfs.ext4 -f $ROOT_DRIVE
+  else
+    read -p " --- root filesystem: btrfs|xfs|ext4 ? " FILESYSTEM
+    create_rootfs
+  fi
+
+}
+
+mount_root() {
+
+  mount $ROOT_DRIVE /mnt
+
+}
+
+mount_boot() {
+
+  if [[ ! -d /mnt/boot ]]; then
+    mkdir -p /mnt/boot
+  fi
+  mount $BOOT_DRIVE /mnt/boot
+
+}
+
+update_pacman() {
+
+  #sed -i --in-place 's/^Server/#Server/g' /etc/pacman.d/mirrorlist
+  echo "Server = $SERVER" > /etc/pacman.d/mirrorlist
+
+  if [[ -f /var/lib/pacman/db.lck ]]; then
+    rm /var/lib/pacman/db.lck
+  fi
+
+  pacman -Syyu --noconfirm
+
+}
+
+install_base() {
+
+  echo '==> installing pacstrap packages'
+  pacstrap /mnt base base-devel linux linux-headers linux-firmware dkms intel-ucode amd-ucode
+
+}
+
+set_fstab() {
+
+  genfstab -U -p /mnt >> /mnt/etc/fstab
+
+}
+
+edit_fstab() {
+
+  sed -i --in-place 's/relatime,space_cache=v2/noatime,compress=zstd,ssd,discard=async/g' /etc/fstab
+
+}
+
+create_swap_file() {
+
+  if [[ ! -f /swapfile ]]; then
+    dd if=/dev/zero of=/swapfile bs=1M count=$SWAPFILE status=progress
+  fi
+
+  if [[ -f /swapfile ]]; then
+    chmod 600 /swapfile
+    mkswap -f /swapfile
+    swapon /swapfile
+  fi
+
+  if [ ! grep -Ew "/swapfile none swap defaults 0 0" /etc/fstab ]; then
+    echo '/swapfile none swap defaults 0 0' >> /etc/fstab
+  fi
+
+}
+
+set_hostname() {
+
+  if [ -z $HOSTNAME ]; then
+    read -p " --- hostname ? " HOSTNAME
+    set_hostname
+  fi
+  echo "$HOSTNAME" > /etc/hostname
+
+}
+
+set_timezone() {
+
+  if [[ -f /usr/share/zoneinfo/$TIMEZONE ]]; then
+    ln -sf /usr/share/zoneinfo/$TIMEZONE /etc/localtime
+    hwclock --systohc --utc
+  else
+    read -p " --- TimeZone Asia/Muscat ? " TIMEZONE
+    set_timezone
+  fi
+
+}
+
+set_locale() {
+
+  if [ -z $LANGUAGE ]; then
+    read -p " --- language en_US ? " LANGUAGE
+    set_locale
+  fi
+
+  if [[ -f /etc/locale.conf ]]; then
+    rm /etc/locale.conf
+  fi
+
+  for LANG in ${LANGUAGE[@]}; do
+    if grep -Ew "$LANG" /etc/locale.gen; then
+      sed -i --in-place "s/^#$LANG.UTF-8/$LANG.UTF-8/" /etc/locale.gen
+      echo "LANG=$LANG.UTF-8" >> /etc/locale.conf
+      locale-gen
+    fi
+  done
+
+}
+
+set_keymap() {
+
+  if localectl list-keymaps | grep -i "$KEYMAP"; then
+    echo "KEYMAP=$KEYMAP" > /etc/vconsole.conf
+  fi
+
+}
+
+set_hosts() {
+
+  echo "127.0.0.1 localhost" > /etc/hosts
+  echo "::1       localhost" >> /etc/hosts
+  echo "127.0.1.1 $HOSTNAME.localdomain $HOSTNAME" >> /etc/hosts
+
+}
+
+set_root_password() {
+
+  if [ -z $ROOT_PASSWORD ]; then
+    read -sp "\n\t-root password           => " ROOT_PASSWORD
+    read -sp "\n\t-root password (confirm) => " check
+    if [ $ROOT_PASSWORD != "$check" ]; then
+      echo "\n\t-ERROR: password does not match"
+      set_root_password
+    fi
+  fi
+
+  echo -en "$ROOT_PASSWORD\n$ROOT_PASSWORD" | passwd
+
+}
+
+create_user() {
+
+  if [ -z $USER_NAME ]; then
+    read -p " --- username ? " USER_NAME
+    create_user
+  fi
+
+  if ! id $USER_NAME &>/dev/null; then
+    useradd -m -g users -G wheel -s /bin/bash $USER_NAME
+    echo "$USER_NAME ALL=(ALL) ALL" >> /etc/sudoers.d/linux
+  fi
+
+  if [ -z $USER_PASSWORD ]; then
+    read -sp "\n\t-password for user: $USER_NAME           => " USER_PASSWORD
+    read -sp "\n\t-password for user: $USER_NAME (confirm) => " check
+    if [ $USER_PASSWORD != "$check" ]; then
+      echo "\n\t-ERROR: password does not match"
+      create_user
+    fi
+  fi
+
+  echo -en "$USER_PASSWORD\n$USER_PASSWORD" | passwd $USER_NAME
+
+}
+
+set_modules_load() {
+  #
+}
+
+set_initcpio() {
+
+  if [ $FILESYSTEM == "btrfs" ]; then
+    sed -i --in-place 's/^MODULES=()/MODULES=(btrfs)/' /etc/mkinitcpio.conf
+  fi
+
+  mkinitcpio -p linux
+
+}
+
+install_packages() {
+
+  # efi boot
+  packages+=' efibootmgr grub grub-customizer'
+
+  # gnome session
+  packages+=' gdm gnome-session gnome-shell gnome-shell-extensions gnome-control-center gnome-tweaks gnome-menus'
+
+  # gnome tools
+  packages+=' gnome-keyring gnome-terminal gnome-disk-utility nautilus gedit gedit-plugins gnome-system-monitor gnome-usage'
+
+  # gnome theme
+  packages+=' arc-gtk-theme arc-solid-gtk-theme arc-icon-theme'
+
+  # utilities
+  packages+=' sudo fakeroot bash-completion syslog-ng dialog unrar unzip wget zip git'
+
+  # fileSystem
+  packages+=' os-prober gptfdisk dosfstools mtools ntfs-3g ntfsprogs btrfs-progs xfsprogs f2fs-tools udftools'
+
+  # network
+  packages+=' firewalld networkmanager network-manager-applet rsync'
+
+  # wireless
+  packages+=' archlinux-keyring wpa_supplicant'
+
+  # GPU
+  if [ $GPU == "intel" ]; then
+    packages+=' xf86-video-intel libva-intel-driver vulkan-intel'
+  elif [ $GPU == "nvidia" ]; then
+    packages+=' nvidia-open-dkms'
+  elif [ $GPU == "amd" ]; then
+    packages+=' xf86-video-amdgpu amdvlk vulkan-radeon vulkan-mesa-layers'
+  elif [ $GPU == "ati" ]; then
+    packages+=' xf86-video-ati'
+  elif [ $GPU == "vesa" ]; then
+    packages+=' xf86-video-vesa'
+  fi
+
+  # vulkan
+  packages+=' vulkan-headers vulkan-icd-loader vulkan-validation-layers vulkan-tools'
+
+  # audio
+  packages+=' pipewire wireplumber'
+
+  # fonts
+  packages+=' font-manager woff2 awesome-terminal-fonts adobe-source-sans-fonts adobe-source-serif-fonts adobe-source-code-pro-fonts ttf-roboto ttf-ubuntu-font-family ttf-dejavu inter-font '
+
+  # install all packages
+  pacman -S --needed --noconfirm $packages
+
+}
+
+install_aur_packages() {
+
+  pacman -S --needed --noconfirm paru
+
+  for i in ${!aur_packages[@]}; do
+    paru -S --noconfirm --needed ${aur_packages[$i]}
+  done
+
+
+}
+
+clean_packages() {
+
+  pacman --noconfirm -Scc
+  paru -Scc --noconfirm
+
+}
+
+set_services() {
+
+  systemctl enable NetworkManager
+  systemctl enable systemd-networkd
+  systemctl enable systemd-resolved
+  systemctl enable firewalld
+  systemctl enable gdm
+
+}
+
+install_grub() {
+
+  grub-install --target=x86_64-efi --efi-directory=/boot --bootloader-id=archlinux
+
+  echo '==> making grub config'
+  grub-mkconfig -o /boot/grub/grub.cfg
+
+}
+
+change_root() {
+
+  mv install /mnt/install
+  arch-chroot /mnt && sh install
+
+}
+
+finish() {
+
+  rm install && exit && sleep 2 && umount -a && reboot
+
+}
+
+set -e
+sleep 3
+
+if mountpoint -q /mnt; then
+  if [[ ! -f /mnt/etc/fstab ]]; then
+    setup_base
+  fi
+else
+  if [[ -f /boot/$CPU-ucode.img ]] && [[ -f /etc/fstab ]]; then
+    configure
+  else
+    setup_drive
+  fi
+fi
+
+#end
