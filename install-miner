@@ -327,7 +327,7 @@ create_user() {
   fi
 
   if [ -z $USER_PASSWORD ]; then
-    read -sp "password for user: $USER_NAME                  => " USER_PASSWORD
+    read -sp "password for user: $USER_NAME           => " USER_PASSWORD
     read -sp "password for user: $USER_NAME (confirm) => " check
     if [ $USER_PASSWORD != "$check" ]; then
       echo "ERROR: password does not match"
@@ -418,9 +418,9 @@ install_aur_packages() {
     git clone https://aur.archlinux.org/paru.git
   fi
 
-  chown -R nobody /home/build/paru
+  chown -R $USER_NAME /home/build/paru
   chmod -R 777 /home/build/paru
-  cd /home/build/paru && sudo -u nobody makepkg -si
+  cd /home/build/paru && sudo -u $USER_NAME makepkg -si
   rm -r /home/build && cd /
 
   for i in ${!aur_packages[@]}; do
