@@ -418,8 +418,8 @@ install_aur_packages() {
     git clone https://aur.archlinux.org/paru.git
   fi
 
-  chown -R nobody /home/build/paru/PKGBUILD
-  chmod -R 777 /home/build/paru/PKGBUILD
+  chown -R nobody /home/build/paru
+  chmod -R 777 /home/build/paru
   cd /home/build/paru && sudo -u nobody makepkg -si
   rm -r /home/build && cd /
 
