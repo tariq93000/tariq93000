@@ -109,6 +109,10 @@ configure() {
   echo '==> configuring initial ramdisk'
   set_initcpio
 
+}
+
+setup_packages() {
+
   echo '==> installing packages'
   install_packages
 
@@ -298,10 +302,10 @@ set_hosts() {
 set_root_password() {
 
   if [ -z $ROOT_PASSWORD ]; then
-    read -sp "\n\t-root password           => " ROOT_PASSWORD
-    read -sp "\n\t-root password (confirm) => " check
+    read -sp "root password           => " ROOT_PASSWORD
+    read -sp "root password (confirm) => " check
     if [ $ROOT_PASSWORD != "$check" ]; then
-      echo "\n\t-ERROR: password does not match"
+      echo "ERROR: password does not match"
       set_root_password
     fi
   fi
@@ -323,10 +327,10 @@ create_user() {
   fi
 
   if [ -z $USER_PASSWORD ]; then
-    read -sp "\n\t-password for user: $USER_NAME           => " USER_PASSWORD
-    read -sp "\n\t-password for user: $USER_NAME (confirm) => " check
+    read -sp "password for user: $USER_NAME                  => " USER_PASSWORD
+    read -sp "password for user: $USER_NAME (confirm) => " check
     if [ $USER_PASSWORD != "$check" ]; then
-      echo "\n\t-ERROR: password does not match"
+      echo "ERROR: password does not match"
       create_user
     fi
   fi
@@ -336,7 +340,7 @@ create_user() {
 }
 
 set_modules_load() {
-  #
+  sleep 1
 }
 
 set_initcpio() {
@@ -404,12 +408,23 @@ install_packages() {
 
 install_aur_packages() {
 
-  pacman -S --needed --noconfirm paru
+  if [[ ! -d /home/build ]]; then
+    mkdir -p /home/build
+  fi
+
+  if [[ ! -d /home/build/paru ]]; then
+    git clone https://aur.archlinux.org/paru.git
+  fi
+
+  mkdir /home/build/paru/PKGBUILD
+  chown -R nobody /home/build
+  chmod -R 777 /home/build
+  cd /home/build/paru && sudo -u nobody makepkg -si
+  rm -r /home/build && cd /
 
   for i in ${!aur_packages[@]}; do
     paru -S --noconfirm --needed ${aur_packages[$i]}
   done
-
 
 }
 
@@ -441,14 +456,14 @@ install_grub() {
 
 change_root() {
 
-  mv install /mnt/install
-  arch-chroot /mnt && sh install
+  mv install-miner /mnt/install-miner
+  arch-chroot /mnt && sh install-miner
 
 }
 
 finish() {
 
-  rm install && exit && sleep 2 && umount -a && reboot
+  rm install-miner && exit && sleep 2 && umount -a && reboot
 
 }
 
@@ -460,7 +475,9 @@ if mountpoint -q /mnt; then
     setup_base
   fi
 else
-  if [[ -f /boot/$CPU-ucode.img ]] && [[ -f /etc/fstab ]]; then
+  if [[ -f /boot/initramfs-linux.img ]]; then
+    setup_packages
+  elif [[ -f /boot/intel-ucode.img ]] && [[ -f /etc/fstab ]]; then
     configure
   else
     setup_drive
