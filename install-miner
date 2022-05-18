@@ -409,11 +409,12 @@ install_packages() {
 install_aur_packages() {
 
   if [[ ! -d /home/build ]]; then
-    mkdir -p /home/build
+    mkdir /home/build
   fi
 
+  cd /home/build/
+
   if [[ ! -d /home/build/paru ]]; then
-    cd /home/build/
     git clone https://aur.archlinux.org/paru.git
   fi
 
